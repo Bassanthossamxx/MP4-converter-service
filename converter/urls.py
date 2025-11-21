@@ -1,7 +1,9 @@
+# urls.py
 from django.urls import path
-from .views import convert_view, status_view
+from .views import StreamIOS , HLSSource , HLSFileServe
 
 urlpatterns = [
-    path("convert", convert_view),
-    path("status/<str:job_id>", status_view),
+    path("stream/ios", StreamIOS.as_view()),
+    path("hls", HLSSource.as_view()),
+    path("hls/<str:folder>/<str:filename>", HLSFileServe.as_view()),
 ]

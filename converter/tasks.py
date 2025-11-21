@@ -1,111 +1,129 @@
 import subprocess
-import os
-import logging
 import shutil
+import os
+import uuid
 from django.conf import settings
-from .models import Mp4Cache, ConversionStatus
-
-logger = logging.getLogger(__name__)
 
 def find_ffmpeg():
-    """Find FFmpeg executable, checking common Windows installation paths."""
-    # First, try to find it in PATH
-    ffmpeg_path = shutil.which("ffmpeg")
-    if ffmpeg_path:
-        return ffmpeg_path
+    path = shutil.which("ffmpeg") or shutil.which("ffmpeg.exe")
+    if path:
+        return path
 
-    # Common Windows installation paths
+    env_path = os.environ.get("FFMPEG_PATH")
+    if env_path and os.path.exists(env_path):
+        return env_path
+
     common_paths = [
         r"C:\ffmpeg\bin\ffmpeg.exe",
         r"C:\ffmpeg\ffmpeg.exe",
         r"C:\Program Files\ffmpeg\bin\ffmpeg.exe",
     ]
 
-    # Also check for installations with version numbers
-    if os.path.exists(r"C:\ffmpeg"):
-        for root, dirs, files in os.walk(r"C:\ffmpeg"):
-            if "ffmpeg.exe" in files:
-                return os.path.join(root, "ffmpeg.exe")
-
-    # Check common paths
     for path in common_paths:
         if os.path.exists(path):
             return path
 
-    # If not found, return "ffmpeg" and let it fail with proper error
     return "ffmpeg"
 
-def convert_to_mp4(job_id):
-    job = Mp4Cache.objects.get(job_id=job_id)
-    source_url = job.original_url
 
-    output_dir = os.path.join(settings.MEDIA_ROOT, "mp4")
-    os.makedirs(output_dir, exist_ok=True)
+def stream_to_mp4(source_url: str):
+    """
+    STREAMING MODE (NOT CONVERSION)
+    - Always fast (<1 min)
+    - No full file processing
+    - iOS compatible
+    - Returns a live MP4 byte stream (pipe)
+    """
 
-    output_path = os.path.join(output_dir, f"{job_id}.mp4")
+    ffmpeg = find_ffmpeg()
 
-    # Find FFmpeg executable
-    ffmpeg_exe = find_ffmpeg()
-    logger.info(f"Using FFmpeg at: {ffmpeg_exe}")
+    # Verify ffmpeg exists before attempting to run
+    if ffmpeg == "ffmpeg":
+        # Check if it's actually in PATH
+        if not shutil.which("ffmpeg") and not shutil.which("ffmpeg.exe"):
+            raise FileNotFoundError(
+                "ffmpeg not found. Please install ffmpeg and add it to your PATH, "
+                "or set FFMPEG_PATH environment variable pointing to ffmpeg.exe"
+            )
+    elif not os.path.exists(ffmpeg):
+        raise FileNotFoundError(
+            f"ffmpeg not found at: {ffmpeg}. "
+            "Please install ffmpeg and add it to your PATH, "
+            "or set FFMPEG_PATH environment variable pointing to ffmpeg.exe"
+        )
 
-    # More robust FFmpeg command with proper error handling
     cmd = [
-        ffmpeg_exe,
-        "-y",  # Overwrite output file if exists
+        ffmpeg,
+        "-reconnect", "1",
+        "-reconnect_streamed", "1",
+        "-reconnect_delay_max", "5",
         "-i", source_url,
-        "-c:v", "libx264",  # Re-encode video to ensure compatibility
-        "-preset", "fast",  # Faster encoding
-        "-crf", "23",  # Quality (lower = better, 23 is default)
+
+        # NO re-encode video
+        "-c:v", "copy",
+
+        # Convert audio for iOS
         "-c:a", "aac",
-        "-b:a", "128k",
-        "-movflags", "+faststart",
-        "-max_muxing_queue_size", "1024",  # Prevent muxing queue overflow
-        output_path
+
+        # Make it a streaming MP4
+        "-movflags", "+frag_keyframe+empty_moov",
+
+        # Output to STDOUT
+        "-f", "mp4",
+        "pipe:1"
     ]
 
     try:
-        logger.info(f"Starting conversion for job {job_id}: {source_url}")
-
-        # Run FFmpeg with timeout and capture output
-        result = subprocess.run(
+        process = subprocess.Popen(
             cmd,
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=600  # 10 minute timeout
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+    except FileNotFoundError as e:
+        raise FileNotFoundError(
+            f"Failed to execute ffmpeg: {e}. "
+            "Please install ffmpeg from https://ffmpeg.org/download.html"
         )
 
-        # Check if output file exists and has size > 0
-        if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
-            job.status = ConversionStatus.READY
-            job.mp4_path = f"mp4/{job_id}.mp4"
-            logger.info(f"Successfully converted job {job_id}")
-        else:
-            job.status = ConversionStatus.FAILED
-            job.error_message = "Output file not created or empty"
-            logger.error(f"Conversion failed for job {job_id}: Output file issue")
+    return process
 
-    except subprocess.TimeoutExpired as e:
-        job.status = ConversionStatus.FAILED
-        job.error_message = "Conversion timeout (>10 minutes)"
-        logger.error(f"Timeout for job {job_id}: {str(e)}")
 
-    except subprocess.CalledProcessError as e:
-        job.status = ConversionStatus.FAILED
-        error_output = e.stderr if e.stderr else str(e)
-        job.error_message = f"FFmpeg error: {error_output[:500]}"  # Limit error message length
-        logger.error(f"FFmpeg error for job {job_id}: {error_output}")
+def generate_hls_stream(source_url: str):
+    """
+    Live HLS streaming with real duration, seeking, and stability.
+    Supports large files instantly.
+    """
+    ffmpeg = find_ffmpeg()
 
-    except FileNotFoundError as e:
-        job.status = ConversionStatus.FAILED
-        job.error_message = "FFmpeg is not installed or not found in PATH. Please install FFmpeg: https://ffmpeg.org/download.html"
-        logger.error(f"FFmpeg not found for job {job_id}: {str(e)}")
+    hls_dir = os.path.join(settings.MEDIA_ROOT, "hls", uuid.uuid4().hex)
+    os.makedirs(hls_dir, exist_ok=True)
 
-    except Exception as e:
-        job.status = ConversionStatus.FAILED
-        job.error_message = f"Unexpected error: {str(e)[:500]}"
-        logger.error(f"Unexpected error for job {job_id}: {str(e)}", exc_info=True)
+    playlist_path = os.path.join(hls_dir, "index.m3u8")
 
-    finally:
-        job.save()
-        logger.info(f"Job {job_id} final status: {job.status}")
+    cmd = [
+        ffmpeg,
+        "-reconnect", "1",
+        "-reconnect_streamed", "1",
+        "-reconnect_delay_max", "5",
+        "-i", source_url,
+
+        # Safe re-encode fallback — ensures H.264 ALWAYS
+        "-c:v", "h264",
+        "-preset", "veryfast",
+
+        # Audio always iOS compatible
+        "-c:a", "aac",
+        "-b:a", "128k",
+
+        # HLS configs
+        "-f", "hls",
+        "-hls_time", "4",
+        "-hls_list_size", "0",           # keep all segments => real duration
+        "-hls_flags", "independent_segments",  # allow seeking anywhere
+
+        playlist_path
+    ]
+
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    return hls_dir, playlist_path, process

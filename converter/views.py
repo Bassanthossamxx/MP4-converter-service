@@ -1,82 +1,83 @@
-from .models import Mp4Cache, ConversionStatus
-from .utils import generate_job_id
-from .tasks import convert_to_mp4
-import threading
-from rest_framework.decorators import api_view
+# views.py
+from django.http import StreamingHttpResponse, Http404
+from django.conf import settings
+from rest_framework.views import APIView
+
 from rest_framework.response import Response
-from rest_framework import status
+import os
+from .tasks import generate_hls_stream
+from .tasks import stream_to_mp4
 
-def run_in_background(job_id):
-    convert_to_mp4(job_id)
 
-@api_view(["POST"])
-def convert_view(request):
-    # For POST requests, use DRF's request.data to get JSON/body params
-    url = request.data.get("url")
+class StreamIOS(APIView):
+    authentication_classes = []   # NO AUTH
+    permission_classes = []       # NO AUTH
 
-    if not url:
-        return Response({"error": "Missing url"}, status=status.HTTP_400_BAD_REQUEST)
+    def get(self, request):
+        url = request.GET.get("url")
+        if not url:
+            return Response({"error": "Missing url"}, status=400)
 
-    # Check cache
-    job = Mp4Cache.objects.filter(original_url=url).first()
+        # Start ffmpeg streaming process
+        process = stream_to_mp4(url)
 
-    # If cached and ready → return MP4 immediately
-    if job and job.status == ConversionStatus.READY:
+        # Generator to stream bytes
+        def generate():
+            while True:
+                chunk = process.stdout.read(4096)
+                if not chunk:
+                    break
+                yield chunk
+
+        # Return live MP4 stream
+        response = StreamingHttpResponse(
+            generate(),
+            content_type="video/mp4"
+        )
+
+        response["Cache-Control"] = "no-cache"
+        response["Accept-Ranges"] = "bytes"
+
+        return response
+
+
+class HLSSource(APIView):
+    authentication_classes = []
+    permission_classes = []
+
+    def get(self, request):
+        url = request.GET.get("url")
+        if not url:
+            return Response({"error": "Missing url"}, status=400)
+
+        hls_dir, playlist_path, process = generate_hls_stream(url)
+
+        base = request.build_absolute_uri("/")
+
         return Response({
-            "status": "ready",
-            "mp4_url": request.build_absolute_uri("/media/" + job.mp4_path),
-        }, status=status.HTTP_200_OK)
+            "mp4_fallback_stream": base + "api/stream?url=" + url,
+            "hls_playlist_stream": base + f"api/hls/{os.path.basename(hls_dir)}/index.m3u8"
+        })
 
-    # If exists but processing/failed → return status
-    if job:
-        response_data = {
-            "status": job.status,
-            "job_id": job.job_id,
-            "mp4_url": None,
-        }
-        if job.status == ConversionStatus.FAILED and job.error_message:
-            response_data["error"] = job.error_message
-        return Response(response_data, status=status.HTTP_200_OK)
+class HLSFileServe(APIView):
+    authentication_classes = []
+    permission_classes = []
 
-    # Create a new job
-    job_id = generate_job_id()
-    Mp4Cache.objects.create(
-        original_url=url,
-        job_id=job_id,
-        status=ConversionStatus.PENDING,
-    )
+    def get(self, request, folder, filename):
+        hls_path = os.path.join(
+            settings.MEDIA_ROOT, "hls", folder, filename
+        )
 
-    # Start conversion in BACKGROUND without blocking API
-    threading.Thread(
-        target=run_in_background,
-        args=(job_id,),
-        daemon=True,
-    ).start()
+        if not os.path.exists(hls_path):
+            raise Http404("HLS segment not found")
 
-    return Response({
-        "status": "processing",
-        "job_id": job_id,
-        "mp4_url": None,
-    }, status=status.HTTP_201_CREATED)
+        # Correct MIME type for .m3u8 and .ts
+        if filename.endswith(".m3u8"):
+            content_type = "application/vnd.apple.mpegurl"
+        else:
+            content_type = "video/mp2t"
 
-@api_view(["GET"])
-def status_view(request, job_id):
-    job = Mp4Cache.objects.filter(job_id=job_id).first()
-
-    if not job:
-        return Response({"error": "Job not found"}, status=status.HTTP_404_NOT_FOUND)
-
-    if job.status == ConversionStatus.READY:
-        return Response({
-            "status": "ready",
-            "mp4_url": request.build_absolute_uri("/media/" + job.mp4_path),
-        }, status=status.HTTP_200_OK)
-
-    response_data = {
-        "status": job.status,
-        "mp4_url": None,
-    }
-    if job.status == ConversionStatus.FAILED and job.error_message:
-        response_data["error"] = job.error_message
-
-    return Response(response_data, status=status.HTTP_200_OK)
+        return StreamingHttpResponse(
+            open(hls_path, "rb"),
+            content_type=content_type
+        )
