@@ -55,8 +55,8 @@ class HLSSource(APIView):
         base = request.build_absolute_uri("/")
 
         return Response({
-            "mp4_fallback_stream": base + "api/stream?url=" + url,
-            "hls_playlist_stream": base + f"api/hls/{os.path.basename(hls_dir)}/index.m3u8"
+            "mp4_fallback_stream": base + "api/stream/mp4?url=" + url,
+            "hls_playlist_stream": base + f"api/stream/hls/{os.path.basename(hls_dir)}/index.m3u8"
         })
 
 class HLSFileServe(APIView):

@@ -20,6 +20,8 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'corsheaders',
     'rest_framework',
+    'drf_spectacular',
+    'drf_spectacular_sidecar',
     'converter',
 ]
 
@@ -29,7 +31,8 @@ REST_FRAMEWORK = {
     ],
     'DEFAULT_PARSER_CLASSES': [
         'rest_framework.parsers.JSONParser',
-    ]
+    ],
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
 }
 
 MIDDLEWARE = [
@@ -109,3 +112,9 @@ STATIC_ROOT = BASE_DIR / 'staticfiles'
 
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
+
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'MP4 Converter Service API',
+    'DESCRIPTION': 'Streaming MP4 and HLS endpoints for video playback.',
+    'VERSION': '1.0.0',
+}

@@ -59,11 +59,15 @@ def stream_to_mp4(source_url: str):
         "-reconnect_delay_max", "5",
         "-i", source_url,
 
-        # NO re-encode video
-        "-c:v", "copy",
+        # Re-encode video for consistent, reasonable quality and lower bitrate
+        "-c:v", "h264",
+        "-preset", "veryfast",      # favor speed over compression
+        "-vf", "scale=-2:720",      # limit height to 720p, keep aspect
+        "-b:v", "2500k",            # target ~2.5 Mbps video bitrate
 
-        # Convert audio for iOS
+        # Convert audio for iOS and control bitrate
         "-c:a", "aac",
+        "-b:a", "128k",
 
         # Make it a streaming MP4
         "-movflags", "+frag_keyframe+empty_moov",
@@ -107,9 +111,11 @@ def generate_hls_stream(source_url: str):
         "-reconnect_delay_max", "5",
         "-i", source_url,
 
-        # Safe re-encode fallback — ensures H.264 ALWAYS
+        # Re-encode video for fast, reasonable-quality HLS
         "-c:v", "h264",
-        "-preset", "veryfast",
+        "-preset", "veryfast",      # fast encoding for live-like streaming
+        "-vf", "scale=-2:720",      # limit to 720p
+        "-b:v", "2500k",            # ~2.5 Mbps
 
         # Audio always iOS compatible
         "-c:a", "aac",
