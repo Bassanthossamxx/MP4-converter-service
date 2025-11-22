@@ -93,11 +93,12 @@ def stream_to_mp4(source_url: str):
 
 
 def generate_hls_stream(source_url: str):
-    import os, uuid, subprocess
+    import os, uuid, subprocess, time
     from django.conf import settings
 
     ffmpeg = find_ffmpeg()
 
+    # Unique HLS folder
     hls_dir = os.path.join(settings.MEDIA_ROOT, "hls", uuid.uuid4().hex)
     os.makedirs(hls_dir, exist_ok=True)
 
@@ -105,33 +106,60 @@ def generate_hls_stream(source_url: str):
 
     cmd = [
         ffmpeg,
+        "-y",  # overwrite if exists
+
+        # Reconnect options to avoid input drop
+        "-reconnect", "1",
+        "-reconnect_streamed", "1",
+        "-reconnect_delay_max", "5",
+
         "-i", source_url,
 
-        # --- VIDEO FIX FOR IOS ---
+        # VIDEO (iOS compatible)
         "-c:v", "h264",
-        "-profile:v", "baseline",  # baseline solves most iOS audio-only issues
+        "-profile:v", "baseline",
         "-level", "3.0",
         "-pix_fmt", "yuv420p",
-        "-g", "48",               # force keyframe every 48 frames
+        "-preset", "veryfast",
+        "-g", "48",
         "-keyint_min", "48",
         "-sc_threshold", "0",
+        "-b:v", "2500k",
 
-        # --- AUDIO FIX ---
+        # Force keyframe every 2 seconds
+        "-force_key_frames", "expr:gte(t,n_forced*2)",
+
+        # AUDIO
         "-c:a", "aac",
         "-b:a", "128k",
         "-ac", "2",
         "-ar", "48000",
 
-        # --- HLS OUTPUT ---
+        # HLS OUTPUT (FAST + FIXED)
         "-f", "hls",
-        "-hls_time", "3",
-        "-hls_list_size", "0",
-        "-hls_flags", "independent_segments+delete_segments",
+        "-hls_time", "2",
+        "-hls_list_size", "6",                # Keep recent segments only
+        "-hls_flags", "independent_segments",  # Fix iOS seeking
         "-hls_segment_type", "mpegts",
 
         playlist_path
     ]
 
+    # Start ffmpeg
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    # ---- FIX FOR "HLS segment not found" ----
+    # Wait for the playlist and first segment to exist
+    for _ in range(50):  # 50 × 0.1s = 5 seconds max
+        if os.path.exists(playlist_path):
+            # Check inside playlist for first segment name
+            try:
+                with open(playlist_path, "r") as f:
+                    content = f.read()
+                    if ".ts" in content:  # segment written
+                        break
+            except:
+                pass
+        time.sleep(0.1)
 
     return hls_dir, playlist_path, process
