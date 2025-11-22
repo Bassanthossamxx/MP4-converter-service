@@ -135,12 +135,14 @@ def generate_hls_stream(source_url: str):
         "-ac", "2",
         "-ar", "48000",
 
-        # HLS OUTPUT (FAST + FIXED)
+        # HLS OUTPUT (OPTIMIZED FOR CHEWIE)
         "-f", "hls",
-        "-hls_time", "2",
-        "-hls_list_size", "6",                # Keep recent segments only
-        "-hls_flags", "independent_segments",  # Fix iOS seeking
+        "-hls_time", "4",                      # 4 second segments
+        "-hls_list_size", "0",                 # Keep all segments (allows full seeking)
+        "-hls_flags", "independent_segments",  # Fix iOS/Android seeking
         "-hls_segment_type", "mpegts",
+        "-start_number", "0",                  # Always start from 0
+        "-hls_playlist_type", "event",         # Event playlist (grows as transcoding)
 
         playlist_path
     ]
