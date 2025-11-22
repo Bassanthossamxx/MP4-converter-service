@@ -108,6 +108,9 @@ def generate_hls_stream(source_url: str):
         ffmpeg,
         "-y",  # overwrite if exists
 
+        # Force start from beginning
+        "-ss", "0",
+
         # Reconnect options to avoid input drop
         "-reconnect", "1",
         "-reconnect_streamed", "1",
@@ -121,13 +124,13 @@ def generate_hls_stream(source_url: str):
         "-level", "3.0",
         "-pix_fmt", "yuv420p",
         "-preset", "veryfast",
-        "-g", "48",
-        "-keyint_min", "48",
-        "-sc_threshold", "0",
+        "-g", "24",              # GOP size = 24 frames (1 second at 24fps)
+        "-keyint_min", "24",     # Minimum keyframe interval
+        "-sc_threshold", "0",    # Disable scene change detection
         "-b:v", "2500k",
 
-        # Force keyframe every 2 seconds
-        "-force_key_frames", "expr:gte(t,n_forced*2)",
+        # Force keyframe at start and every segment
+        "-force_key_frames", "expr:gte(t,n_forced*4)",
 
         # AUDIO
         "-c:a", "aac",
