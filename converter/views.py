@@ -20,17 +20,18 @@ class HLSSource(APIView):
         if not url:
             return Response({"error": "Missing url"}, status=400)
 
-        # 🔥 NEW: SESSION PER PLAY -> always 0:00, no cross-device progress
         session_id = uuid4().hex
 
-        hls_dir, master_playlist, process = generate_hls_stream(url, session=session_id)
+        hls_dir, index_playlist, process = generate_hls_stream(
+            url,
+            session=session_id
+        )
 
-        base = request.build_absolute_uri("/")
+        base = request.build_absolute_uri("/").rstrip("/")
 
         return Response({
-            "hls_playlist_stream": f"{base}api/stream/hls/{session_id}/master.m3u8"
+            "hls_playlist_stream": f"{base}/api/stream/hls/{session_id}/index.m3u8"
         })
-
 
 class HLSFileServe(APIView):
     authentication_classes = []
@@ -39,15 +40,15 @@ class HLSFileServe(APIView):
     def get(self, request, folder, filename):
         hls_path = os.path.join(settings.MEDIA_ROOT, "hls", folder, filename)
 
+        # Wait until file exists + ready
         waited = 0
-        while not os.path.exists(hls_path) and waited < 30:
-            time.sleep(0.5)
-            waited += 0.5
+        while not os.path.exists(hls_path) and waited < 10:
+            time.sleep(0.2)
+            waited += 0.2
 
         if not os.path.exists(hls_path):
             return JsonResponse({"error": "HLS file not found"}, status=404)
 
-        # TYPE
         if filename.endswith(".m3u8"):
             content_type = "application/vnd.apple.mpegurl"
         else:
@@ -55,9 +56,10 @@ class HLSFileServe(APIView):
 
         response = StreamingHttpResponse(open(hls_path, "rb"), content_type=content_type)
 
-        # 🔥 HARD NO-CACHE
-        response["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        # iOS important headers
+        response["Cache-Control"] = "no-cache, no-store, must-revalidate"
         response["Pragma"] = "no-cache"
         response["Expires"] = "0"
+        response["X-Accel-Buffering"] = "no"
 
         return response
