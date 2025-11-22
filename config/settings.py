@@ -114,7 +114,7 @@ MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
 SPECTACULAR_SETTINGS = {
-    'TITLE': 'MP4 Converter Service API',
-    'DESCRIPTION': 'Streaming MP4 and HLS endpoints for video playback.',
+    'TITLE': 'Videos Url Converter Service API',
+    'DESCRIPTION': 'Streaming HLS endpoints for video playback.',
     'VERSION': '1.0.0',
 }
