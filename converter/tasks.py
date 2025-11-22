@@ -93,14 +93,9 @@ def stream_to_mp4(source_url: str):
 
 
 def generate_hls_stream(source_url: str):
-    """
-    Live HLS streaming with real duration, seeking, and stability.
-    Supports large files instantly.
-    """
-    import time
-    import logging
-    
-    logger = logging.getLogger(__name__)
+    import os, uuid, subprocess
+    from django.conf import settings
+
     ffmpeg = find_ffmpeg()
 
     hls_dir = os.path.join(settings.MEDIA_ROOT, "hls", uuid.uuid4().hex)
@@ -110,62 +105,33 @@ def generate_hls_stream(source_url: str):
 
     cmd = [
         ffmpeg,
-        "-reconnect", "1",
-        "-reconnect_streamed", "1",
-        "-reconnect_delay_max", "5",
         "-i", source_url,
 
-        # Ensure standard stereo audio layout
-        "-ac", "2",
-
-        # Re-encode video for fast, reasonable-quality HLS
+        # --- VIDEO FIX FOR IOS ---
         "-c:v", "h264",
-        "-preset", "veryfast",      # fast encoding for live-like streaming
-        "-vf", "scale=-2:720",      # limit to 720p
-        "-b:v", "2500k",            # ~2.5 Mbps
+        "-profile:v", "baseline",  # baseline solves most iOS audio-only issues
+        "-level", "3.0",
+        "-pix_fmt", "yuv420p",
+        "-g", "48",               # force keyframe every 48 frames
+        "-keyint_min", "48",
+        "-sc_threshold", "0",
 
-        # Audio always iOS compatible
+        # --- AUDIO FIX ---
         "-c:a", "aac",
         "-b:a", "128k",
-
-        # Make audio profile and rate explicit for compatibility
-        "-profile:a", "aac_low",
+        "-ac", "2",
         "-ar", "48000",
 
-        # HLS configs
+        # --- HLS OUTPUT ---
         "-f", "hls",
-        "-hls_time", "4",
-        "-hls_list_size", "0",           # keep all segments => real duration
-        "-hls_flags", "independent_segments",  # allow seeking
+        "-hls_time", "3",
+        "-hls_list_size", "0",
+        "-hls_flags", "independent_segments+delete_segments",
         "-hls_segment_type", "mpegts",
 
         playlist_path
     ]
 
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-
-    # Quick check if ffmpeg starts successfully (only wait 2 seconds)
-    max_wait = 2
-    waited = 0
-    while waited < max_wait:
-        # Check if process died immediately
-        if process.poll() is not None:
-            stderr_output = process.stderr.read().decode('utf-8', errors='ignore')
-            logger.error(f"ffmpeg failed immediately for {source_url}: {stderr_output}")
-            raise RuntimeError(f"ffmpeg process failed: {stderr_output[:500]}")
-        
-        # If playlist exists, we're good to go
-        if os.path.exists(playlist_path):
-            break
-        time.sleep(0.2)
-        waited += 0.2
-    
-    # Set permissions to ensure web server can read
-    try:
-        os.chmod(hls_dir, 0o755)
-        if os.path.exists(playlist_path):
-            os.chmod(playlist_path, 0o644)
-    except:
-        pass  # ignore permission errors on Windows
 
     return hls_dir, playlist_path, process
