@@ -14,15 +14,14 @@ def find_ffmpeg() -> str:
 
 def stream_downloader_to_ffmpeg(source_url: str, ffmpeg_process: subprocess.Popen):
     """
-    Streams the remote MKV/MP4 to FFmpeg via stdin using Range requests.
-    - Uses fixed-size chunks
-    - Retries on network errors
-    - Runs until whole file streamed or server stops responding
+    FORCE continuous streaming:
+    - Never stop on failed chunk
+    - Always retry
+    - Always move to next chunk once something is received
     """
 
-    CHUNK_SIZE = 1024 * 1024 * 2  # 2MB per request
+    CHUNK_SIZE = 1024 * 1024 * 2  # 2MB
     offset = 0
-    max_retries = 8
 
     base_headers = {
         "User-Agent": "Mozilla/5.0",
@@ -30,82 +29,50 @@ def stream_downloader_to_ffmpeg(source_url: str, ffmpeg_process: subprocess.Pope
         "Referer": "https://google.com/",
     }
 
-    # Try to get content length (for logging / debug)
-    total_size = None
-    try:
-        head = requests.head(source_url, headers=base_headers, timeout=10)
-        if head.status_code in (200, 206):
-            total_size = int(head.headers.get("Content-Length", "0") or "0")
-            print(f"📦 Remote size: {total_size} bytes")
-    except Exception as e:
-        print("⚠ HEAD failed:", e)
+    print("⏳ Start FORCE streaming:", source_url)
 
-    print("⏳ Start streaming to FFmpeg:", source_url)
+    while True:  
+        # If FFmpeg died → stop
+        if ffmpeg_process.poll() is not None:
+            print("❌ FFmpeg ended, stopping downloader.")
+            return
 
-    while True:
         headers = base_headers.copy()
         headers["Range"] = f"bytes={offset}-{offset + CHUNK_SIZE - 1}"
 
-        retries = 0
+        try:
+            r = requests.get(
+                source_url,
+                headers=headers,
+                timeout=10,
+            )
 
-        while True:
+            # ❌ If status != 200/206 → skip and retry immediately
+            if r.status_code not in (200, 206):
+                print(f"❌ Bad chunk status {r.status_code}, retrying...")
+                continue
+
+            if not r.content:
+                print("⚠ Empty chunk, retrying...")
+                time.sleep(0.5)
+                continue
+
+            # Write into FFmpeg
             try:
-                r = requests.get(
-                    source_url,
-                    headers=headers,
-                    timeout=15,
-                )
-
-                if r.status_code not in (200, 206):
-                    print("❌ Chunk request failed, status:", r.status_code)
-                    return
-
-                data = r.content
-                if not data:
-                    print("✔ No more data (EOF reached from server).")
-                    try:
-                        ffmpeg_process.stdin.close()
-                    except Exception:
-                        pass
-                    return
-
-                # Write chunk into ffmpeg stdin
-                try:
-                    ffmpeg_process.stdin.write(data)
-                    ffmpeg_process.stdin.flush()
-                except BrokenPipeError:
-                    print("⚠ FFmpeg stdin closed (broken pipe).")
-                    return
-
-                offset += len(data)
-
-                if total_size:
-                    percent = offset * 100 / total_size
-                    print(f"⬇ streamed {offset//1024//1024} MB ({percent:.1f}%)")
-                    if offset >= total_size:
-                        print("✔ Finished streaming whole file.")
-                        try:
-                            ffmpeg_process.stdin.close()
-                        except Exception:
-                            pass
-                        return
-                else:
-                    print(f"⬇ streamed {offset//1024//1024} MB")
-
-                # success → break retry loop
-                break
-
+                ffmpeg_process.stdin.write(r.content)
+                ffmpeg_process.stdin.flush()
             except Exception as e:
-                retries += 1
-                print(f"⚠ Network error on chunk (retry {retries}/{max_retries}):", e)
-                if retries >= max_retries:
-                    print("❌ Too many retries, aborting stream.")
-                    try:
-                        ffmpeg_process.stdin.close()
-                    except Exception:
-                        pass
-                    return
-                time.sleep(2)
+                print("❌ FFmpeg closed stdin:", e)
+                return
+
+            offset += len(r.content)
+            print(f"⬇ streamed {offset//1024//1024} MB")
+
+        except Exception as e:
+            # ❗ NEVER STOP → Always retry
+            print("⚠ Network error, retrying:", e)
+            time.sleep(1)
+            continue
 
 
 def generate_hls_stream(source_url: str, session: str):
