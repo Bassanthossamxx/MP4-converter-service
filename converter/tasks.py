@@ -97,6 +97,10 @@ def generate_hls_stream(source_url: str):
     Live HLS streaming with real duration, seeking, and stability.
     Supports large files instantly.
     """
+    import time
+    import logging
+    
+    logger = logging.getLogger(__name__)
     ffmpeg = find_ffmpeg()
 
     hls_dir = os.path.join(settings.MEDIA_ROOT, "hls", uuid.uuid4().hex)
@@ -132,12 +136,36 @@ def generate_hls_stream(source_url: str):
         "-f", "hls",
         "-hls_time", "4",
         "-hls_list_size", "0",           # keep all segments => real duration
-        "-hls_flags", "independent_segments+delete_segments+program_date_time",  # allow seeking and cleanup
+        "-hls_flags", "independent_segments",  # allow seeking
         "-hls_segment_type", "mpegts",
 
         playlist_path
     ]
 
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    # Quick check if ffmpeg starts successfully (only wait 2 seconds)
+    max_wait = 2
+    waited = 0
+    while waited < max_wait:
+        # Check if process died immediately
+        if process.poll() is not None:
+            stderr_output = process.stderr.read().decode('utf-8', errors='ignore')
+            logger.error(f"ffmpeg failed immediately for {source_url}: {stderr_output}")
+            raise RuntimeError(f"ffmpeg process failed: {stderr_output[:500]}")
+        
+        # If playlist exists, we're good to go
+        if os.path.exists(playlist_path):
+            break
+        time.sleep(0.2)
+        waited += 0.2
+    
+    # Set permissions to ensure web server can read
+    try:
+        os.chmod(hls_dir, 0o755)
+        if os.path.exists(playlist_path):
+            os.chmod(playlist_path, 0o644)
+    except:
+        pass  # ignore permission errors on Windows
 
     return hls_dir, playlist_path, process
