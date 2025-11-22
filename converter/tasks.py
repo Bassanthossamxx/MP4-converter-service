@@ -111,6 +111,9 @@ def generate_hls_stream(source_url: str):
         "-reconnect_delay_max", "5",
         "-i", source_url,
 
+        # Ensure standard stereo audio layout
+        "-ac", "2",
+
         # Re-encode video for fast, reasonable-quality HLS
         "-c:v", "h264",
         "-preset", "veryfast",      # fast encoding for live-like streaming
@@ -121,11 +124,16 @@ def generate_hls_stream(source_url: str):
         "-c:a", "aac",
         "-b:a", "128k",
 
+        # Make audio profile and rate explicit for compatibility
+        "-profile:a", "aac_low",
+        "-ar", "48000",
+
         # HLS configs
         "-f", "hls",
         "-hls_time", "4",
         "-hls_list_size", "0",           # keep all segments => real duration
-        "-hls_flags", "independent_segments",  # allow seeking anywhere
+        "-hls_flags", "independent_segments+delete_segments+program_date_time",  # allow seeking and cleanup
+        "-hls_segment_type", "mpegts",
 
         playlist_path
     ]
