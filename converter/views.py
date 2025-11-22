@@ -40,11 +40,10 @@ class HLSFileServe(APIView):
     def get(self, request, folder, filename):
         hls_path = os.path.join(settings.MEDIA_ROOT, "hls", folder, filename)
 
-        # Wait until file exists + ready
         waited = 0
         while not os.path.exists(hls_path) and waited < 10:
-            time.sleep(0.2)
-            waited += 0.2
+            time.sleep(0.1)
+            waited += 0.1
 
         if not os.path.exists(hls_path):
             return JsonResponse({"error": "HLS file not found"}, status=404)
@@ -54,9 +53,11 @@ class HLSFileServe(APIView):
         else:
             content_type = "video/mp2t"
 
-        response = StreamingHttpResponse(open(hls_path, "rb"), content_type=content_type)
+        response = StreamingHttpResponse(
+            open(hls_path, "rb"),
+            content_type=content_type
+        )
 
-        # iOS important headers
         response["Cache-Control"] = "no-cache, no-store, must-revalidate"
         response["Pragma"] = "no-cache"
         response["Expires"] = "0"
