@@ -9,7 +9,7 @@ def find_ffmpeg():
     return ffmpeg or "ffmpeg"
 
 
-def generate_hls_stream(source_url: str, session: str):
+def generate_hls_stream(source_url: str, session: str, start_time: float = 0.0):
     import time
     ffmpeg = find_ffmpeg()
 
@@ -18,28 +18,27 @@ def generate_hls_stream(source_url: str, session: str):
 
     master_playlist = os.path.join(hls_dir, "master.m3u8")
 
+    # Fewer, lower renditions for faster startup and less bandwidth
     renditions = [
-        ("240p", "426x240", "400k"),
-        ("360p", "640x360", "800k"),
-        ("480p", "854x480", "1200k"),
-        ("720p", "1280x720", "2500k"),
+        ("240p", "426x240", "250k"),
+        ("360p", "640x360", "500k"),
     ]
 
     cmd = [
         ffmpeg, "-y",
+        "-ss", str(start_time),  # seek to requested start time (usually 0.0)
         "-i", source_url,
 
-        # FORCE exact zero timestamp
-        "-ss", "0",
+        # timing controls, force HLS timeline to start at 0
         "-vsync", "cfr",
-        "-copyts",
         "-start_at_zero",
         "-avoid_negative_ts", "make_zero",
         "-muxpreload", "0",
         "-muxdelay", "0",
 
+        # Encoding speed / latency
         "-threads", "2",
-        "-preset", "veryfast",
+        "-preset", "superfast",
         "-tune", "zerolatency",
         "-sc_threshold", "0",
     ]
@@ -50,6 +49,8 @@ def generate_hls_stream(source_url: str, session: str):
         playlist = f"{name}.m3u8"
         variants.append((playlist, res, bitrate))
 
+        numeric_bitrate = bitrate.replace("k", "000")
+
         cmd.extend([
             "-map", "0:v", "-map", "0:a",
             "-c:v", "h264",
@@ -58,23 +59,26 @@ def generate_hls_stream(source_url: str, session: str):
             "-pix_fmt", "yuv420p",
             "-s:v", res,
             "-b:v", bitrate,
+            "-maxrate", numeric_bitrate,
+            "-bufsize", str(int(int(numeric_bitrate) * 1.5)),
 
-            # keyframe EXACT at t=0
+            # keyframe every segment
             "-g", "30",
             "-keyint_min", "30",
             "-force_key_frames", "expr:gte(t,n_forced)",
 
-            # Audio
+            # Audio - slightly lower bitrate and sample rate
             "-c:a", "aac",
-            "-b:a", "128k",
+            "-b:a", "96k",
             "-ac", "2",
-            "-ar", "48000",
+            "-ar", "44100",
 
-            # HLS - optimized for fast startup and user-controlled seeking
+            # HLS: very short segments, sliding window, independent segments
             "-f", "hls",
-            "-hls_time", "2",
-            "-hls_list_size", "0",
-            "-hls_flags", "independent_segments",
+            "-hls_time", "1.5",
+            "-hls_playlist_type", "event",
+            "-hls_flags", "independent_segments+delete_segments+append_list",
+            "-hls_list_size", "6",
             "-start_number", "0",
             os.path.join(hls_dir, playlist)
         ])
@@ -88,14 +92,22 @@ def generate_hls_stream(source_url: str, session: str):
             m3u.write(f"#EXT-X-STREAM-INF:BANDWIDTH={bw},RESOLUTION={res}\n")
             m3u.write(f"{playlist}\n")
 
-    # wait for segments
-    for _ in range(50):
+    # wait for enough segments so player can start smoothly
+    for _ in range(80):  # up to ~8s
+        ready = True
         for playlist, _, _ in variants:
             path = os.path.join(hls_dir, playlist)
-            if os.path.exists(path):
-                with open(path, "r") as f:
-                    if ".ts" in f.read():
-                        return hls_dir, master_playlist, process
+            if not os.path.exists(path):
+                ready = False
+                break
+            with open(path, "r") as f:
+                content = f.read()
+                # need at least ~2 segments
+                if content.count(".ts") < 2:
+                    ready = False
+                    break
+        if ready:
+            return hls_dir, master_playlist, process
         time.sleep(0.1)
 
     return hls_dir, master_playlist, process
