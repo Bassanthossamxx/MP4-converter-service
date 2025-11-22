@@ -70,11 +70,11 @@ def generate_hls_stream(source_url: str, session: str):
             "-ac", "2",
             "-ar", "48000",
 
-            # HLS
+            # HLS - optimized for fast startup and user-controlled seeking
             "-f", "hls",
-            "-hls_time", "1",
-            "-hls_list_size", "10000",
-            "-hls_flags", "independent_segments+omit_endlist",
+            "-hls_time", "2",
+            "-hls_list_size", "0",
+            "-hls_flags", "independent_segments",
             "-start_number", "0",
             os.path.join(hls_dir, playlist)
         ])
