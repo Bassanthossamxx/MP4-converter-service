@@ -19,41 +19,46 @@ def generate_hls_stream(source_url: str, session: str):
 
     cmd = [
         ffmpeg, "-y",
-        "-threads", "4",
+
+        # Very important for MKV = faster detect
+        "-analyzeduration", "100000",
+        "-probesize", "100000",
 
         "-i", source_url,
 
-        # Ultra fast video
+        # ULTRA FAST iOS Compatible
         "-c:v", "libx264",
         "-preset", "ultrafast",
-        "-tune", "fastdecode",
+        "-tune", "zerolatency",
         "-profile:v", "baseline",
-        "-level", "3.0",
+        "-level:v", "3.0",
         "-pix_fmt", "yuv420p",
+
+        # lowest quality = fastest
         "-vf", "scale=426:240",
-        "-b:v", "600k",
-        "-maxrate", "600k",
-        "-bufsize", "1200k",
+        "-b:v", "500k",
+        "-maxrate", "500k",
+        "-bufsize", "1000k",
 
-        # keyframe every 2 seconds
-        "-g", "48",
-        "-keyint_min", "48",
+        # Keyframe every 1 second
+        "-g", "24",
+        "-keyint_min", "24",
 
-        # audio low
+        # Audio fast encode
         "-c:a", "aac",
         "-b:a", "64k",
         "-ac", "2",
         "-ar", "44100",
 
-        # always start from 0.00
-        "-fflags", "+genpts",
+        # ALWAYS start from 0:00
         "-reset_timestamps", "1",
         "-avoid_negative_ts", "make_zero",
+        "-fflags", "+genpts",
 
         # HLS
         "-f", "hls",
-        "-hls_time", "2",
-        "-hls_list_size", "999999",       # <== keep full video!
+        "-hls_time", "1",              # fastest possible startup
+        "-hls_list_size", "12",        # ~12 sec sliding window
         "-start_number", "0",
         "-hls_flags", "independent_segments",
         "-hls_segment_type", "mpegts",
@@ -63,14 +68,11 @@ def generate_hls_stream(source_url: str, session: str):
 
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-    # --- Preload ~30 seconds without blocking ffmpeg output ---
+    # minimal wait: only wait for first segment (~0.2–0.5s)
     import time
-    needed_segments = 30 // 2  # 2s segment → need 15 segments
-
-    for _ in range(300):  # wait ~30s max, but usually ready in 3–6s
+    for _ in range(20):  # 2 seconds max
         if os.path.exists(playlist_path):
-            data = open(playlist_path).read()
-            if data.count(".ts") >= needed_segments:
+            if ".ts" in open(playlist_path).read():
                 break
         time.sleep(0.1)
 
